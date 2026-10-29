@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+build/
+resources/backend/
+resources/backend-dist/
+resources/engine/*.exe
+src-tauri/target/
+test-results/
+product/
+src-tauri/gen/
+src-tauri/icons/android/
+src-tauri/icons/ios/
+.venv/
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.log
+data/
+runtime/
+# Local-only acceptance depends on the separate, private legacy panel.
+tests/acceptance_live.py

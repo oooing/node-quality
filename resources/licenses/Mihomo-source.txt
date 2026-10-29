@@ -1,0 +1,7 @@
+Mihomo Meta v1.19.32 windows amd64, unmodified upstream engine.
+Official release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32
+Source: https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+Source archive: https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.32.zip
+The source repository does not contain an engine binary. Run scripts/fetch_engine.py
+to download the official compatible x64 build. Its archive SHA-256 is pinned in
+resources/engine/manifest.json. GPL version 3 text accompanies this notice.

@@ -1,0 +1,16 @@
+[package]
+name = "node-quality"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/oooing/node-quality"
+description = "Windows desktop app for isolated subscription node quality checks"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.3", features = [] }
+tauri-plugin-single-instance = "=2.4.3"
+serde_json = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_UI_WindowsAndMessaging"] }
