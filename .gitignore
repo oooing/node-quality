@@ -21,3 +21,5 @@ data/
 runtime/
 # Local-only acceptance depends on the separate, private legacy panel.
 tests/acceptance_live.py
+# Local design explorations are not part of the desktop distribution.
+demos/

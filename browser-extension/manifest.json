@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "云鉴 · 网页助手",
+  "version": "0.2.2",
+  "description": "将 Ping0 检测结果自动保存到云鉴或旧面板；需要验证时由你完成。",
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://ping0.cc/ip/*"
+      ],
+      "js": [
+        "parser.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

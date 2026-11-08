@@ -1,5 +1,6 @@
 """Small local history store, with the last successful result kept on failure."""
 import json
+import ipaddress
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,12 @@ class Store:
                     payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS ping0_checks_node ON ping0_checks(node_id, checked_at DESC);
+                CREATE TABLE IF NOT EXISTS favorites (node_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS latency (node_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS ip_watch (
+                    node_id TEXT PRIMARY KEY, ip TEXT NOT NULL, checked_at TEXT NOT NULL,
+                    old_ip TEXT, changed_at TEXT, acknowledged INTEGER NOT NULL DEFAULT 1
+                );
             ''')
 
     @contextmanager
@@ -54,11 +61,14 @@ class Store:
             db.execute('BEGIN IMMEDIATE')
             previous = db.execute('SELECT payload FROM latest WHERE node_id=?', (node['id'],)).fetchone()
             previous = json.loads(previous[0]) if previous else None
+            if record.get('connectivity'):
+                self._save_latency(db, node['id'], record)
             record['ip_changed'] = None
             record['score_delta'] = None
             if record['status'] == 'ok' and previous and record['checked_at'] > previous['checked_at']:
                 record['ip_changed'] = record['ip'] != previous['ip']
                 record['score_delta'] = record['score'] - previous['score']
+            self._observe_ip(db, node['id'], record, previous)
             previous_ping0 = previous.get('ping0_latest') if previous else None
             ping0 = record.get('ping0')
             if ping0:
@@ -80,6 +90,61 @@ class Store:
                           (SELECT id FROM checks WHERE node_id=? ORDER BY checked_at DESC,id DESC LIMIT ?)''',
                        (node['id'], node['id'], KEEP))
         return record
+
+    def _observe_ip(self, db, node_id, record, previous):
+        address = record.get('observed_ip') or (record.get('ip') if record['status'] == 'ok' else None)
+        try:
+            address = str(ipaddress.IPv4Address(address))
+        except (ValueError, TypeError):
+            return
+        row = db.execute('SELECT ip,checked_at FROM ip_watch WHERE node_id=?', (node_id,)).fetchone()
+        old_ip, old_time = row if row else ((previous or {}).get('ip'), (previous or {}).get('checked_at'))
+        if old_time and datetime.fromisoformat(record['checked_at']) <= datetime.fromisoformat(old_time):
+            return
+        changed = bool(old_ip and old_ip != address)
+        if changed:
+            record['previous_ip'] = old_ip
+            record['ip_changed'] = True
+            db.execute('''INSERT INTO ip_watch VALUES(?,?,?,?,?,0) ON CONFLICT(node_id) DO UPDATE SET
+                ip=excluded.ip,checked_at=excluded.checked_at,old_ip=excluded.old_ip,
+                changed_at=excluded.changed_at,acknowledged=0''',
+                (node_id,address,record['checked_at'],old_ip,record['checked_at']))
+        else:
+            db.execute('''INSERT INTO ip_watch(node_id,ip,checked_at) VALUES(?,?,?)
+                ON CONFLICT(node_id) DO UPDATE SET ip=excluded.ip,checked_at=excluded.checked_at''',
+                (node_id,address,record['checked_at']))
+
+    def set_favorite(self, node, saved):
+        with self.connect() as db:
+            if saved:
+                public = {k:node[k] for k in ('id','name','profile_id','profile_name','client','type')}
+                db.execute('INSERT INTO favorites VALUES(?,?) ON CONFLICT(node_id) DO UPDATE SET payload=excluded.payload',
+                           (node['id'],json.dumps(public,ensure_ascii=False)))
+            else:
+                db.execute('DELETE FROM favorites WHERE node_id=?', (node['id'],))
+
+    def extras(self):
+        with self.connect() as db:
+            favorites = {key:json.loads(value) for key,value in db.execute('SELECT * FROM favorites')}
+            latency = {key:json.loads(value) for key,_,value in db.execute('SELECT * FROM latency')}
+            alerts = {key:{'previous_ip':old,'current_ip':ip,'checked_at':at}
+                      for key,ip,old,at in db.execute('SELECT node_id,ip,old_ip,changed_at FROM ip_watch WHERE acknowledged=0')}
+        return favorites,latency,alerts
+
+    def acknowledge_ip(self, node_id):
+        with self.connect() as db:
+            db.execute('UPDATE ip_watch SET acknowledged=1 WHERE node_id=?', (node_id,))
+
+    def _save_latency(self, db, node_id, record):
+        row = db.execute('SELECT checked_at FROM latency WHERE node_id=?', (node_id,)).fetchone()
+        if row and datetime.fromisoformat(record['checked_at']) <= datetime.fromisoformat(row[0]):
+            return
+        db.execute('INSERT OR REPLACE INTO latency VALUES(?,?,?)',
+                   (node_id,record['checked_at'],json.dumps(record,ensure_ascii=False)))
+
+    def add_latency(self, node, record):
+        with self.connect() as db:
+            self._save_latency(db, node['id'], record)
 
     def add_ping0(self, node_id, target_ip, based_on_checked_at, result, job_id):
         """Save a browser supplement without creating or refreshing an IPPure check."""

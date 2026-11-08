@@ -1,0 +1,6 @@
+#clash-ip-panel-ping0-result{position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;align-items:center;gap:12px;max-width:min(440px,calc(100vw - 32px));box-sizing:border-box;padding:12px 15px;border:1px solid #c9ddd2;border-radius:9px;background:#f4fbf7;color:#28543b;box-shadow:0 3px 18px #00000014;font:13px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;overflow-wrap:anywhere}
+#clash-ip-panel-ping0-result.save-error{color:#963c31;border-color:#e9c9c3;background:#fff6f4}
+#clash-ip-panel-ping0-result button{flex-shrink:0;cursor:pointer;border:1px solid currentColor;border-radius:5px;padding:5px 8px;background:transparent;color:inherit;font:inherit;white-space:nowrap}
+#clash-ip-panel-ping0-result button[hidden]{display:none!important}
+#clash-ip-panel-ping0-result button:focus-visible{outline:2px solid currentColor;outline-offset:3px}
+@media(max-width:420px){#clash-ip-panel-ping0-result{right:12px;bottom:12px;max-width:calc(100vw - 24px);flex-wrap:wrap;gap:6px}}

@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from catalog import PanelError
 from subscriptions import Subscriptions, discover, extract_nodes
-from service import Service, is_due, DEFAULTS
+from service import Service, is_due, detection_progress, DEFAULTS
 from main import handler
 from http.server import ThreadingHTTPServer
 import threading
@@ -74,6 +74,83 @@ class ServiceTests(unittest.TestCase):
         self.assertGreater(self.subs.items[self.id]['last_update'], 0)
         self.assertEqual(before, {p: p.read_bytes() for p in self.client.rglob('*') if p.is_file()})
 
+    def test_client_sources_keep_same_named_subscriptions_distinct(self):
+        roots = [self.root / 'io.github.clash-verge.clash-verge',
+                 self.root / 'io.github.clash-verge-rev.clash-verge-rev']
+        for root in roots:
+            root.mkdir()
+            (root / 'profiles.yaml').write_text(yaml.safe_dump({'items': [
+                {'uid': 'same-uid', 'type': 'remote', 'name': 'Clash_1793077309.yaml',
+                 'file': 'one.yaml', 'url': 'https://example.invalid/?token=secret'}]}), encoding='utf-8')
+        rows = discover(roots)
+        self.assertEqual([r['origin'] for r in rows], ['Clash Verge', 'Clash Verge Rev'])
+        self.assertEqual([r['name'] for r in rows], ['Clash_1793077309.yaml'] * 2)
+        self.assertNotEqual(rows[0]['id'], rows[1]['id'])
+        self.assertEqual([r['id'] for r in rows], [r['id'] for r in discover(roots)])
+
+    def test_source_rename_keeps_history_nodes_and_schedule(self):
+        self.service.step()
+        before = self.subs.nodes(self.id)
+        history = self.service.store.history(before[0]['id'])
+        original = self.subs.items[self.id].copy()
+        path = self.client / 'profiles.yaml'
+        data = yaml.safe_load(path.read_text(encoding='utf-8'))
+        data['items'][0]['name'] = 'Clash_1793077309.yaml'
+        path.write_text(yaml.safe_dump(data), encoding='utf-8')
+        self.subs.scan()
+        after = self.subs.nodes(self.id)
+        self.assertEqual([(n['id'], n['fingerprint']) for n in before],
+                         [(n['id'], n['fingerprint']) for n in after])
+        self.assertTrue(all(n['profile_name'] == 'Clash_1793077309.yaml' for n in after))
+        self.assertEqual(self.service.store.history(before[0]['id']), history)
+        for key in ('enabled', 'next_update', 'last_update'):
+            self.assertEqual(self.subs.items[self.id][key], original[key])
+
+    def test_deleted_source_leaves_active_list_and_jobs_but_keeps_history(self):
+        self.service.step()
+        node = self.subs.nodes(self.id)[0]
+        history = self.service.store.history(node['id'])
+        original = (self.client / 'profiles.yaml').read_text(encoding='utf-8')
+        imported = self.subs.add('Manual', text=yaml.safe_dump({'proxies': [proxy('Manual')]}))
+        data = yaml.safe_load(original)
+        data['items'] = [p for p in data['items'] if p['uid'] != 'one']
+        data['current'] = 'two'
+        (self.client / 'profiles.yaml').write_text(yaml.safe_dump(data), encoding='utf-8')
+        self.service.refresh_queue.append(self.id)
+        self.subs.scan()
+        self.assertNotIn(self.id, [p['id'] for p in self.subs.public()])
+        self.assertIn(imported, [p['id'] for p in self.subs.public()])
+        self.assertEqual(self.subs.nodes(self.id), [])
+        self.assertNotEqual(self.service.state(self.id)['profile_id'], self.id)
+        with patch('subscriptions.fetch_yaml') as fetch:
+            self.service.step()
+            fetch.assert_not_called()
+        self.assertEqual(self.service.store.history(node['id']), history)
+        reopened = Subscriptions(self.root / 'data', roots=[self.client])
+        self.assertNotIn(self.id, [p['id'] for p in reopened.public()])
+        (self.client / 'profiles.yaml').write_text(original, encoding='utf-8')
+        self.subs.scan()
+        self.assertIn(self.id, [p['id'] for p in self.subs.public()])
+        self.assertEqual(self.service.store.history(node['id']), history)
+
+    def test_unreadable_list_or_other_directory_does_not_hide_sources(self):
+        original = (self.client / 'profiles.yaml').read_text(encoding='utf-8')
+        before = self.subs.public()
+        for content in ('', 'items: [', 'items: null'):
+            (self.client / 'profiles.yaml').write_text(content, encoding='utf-8')
+            self.subs.scan()
+            self.assertEqual(self.subs.public(), before)
+        (self.client / 'profiles.yaml').write_text(original, encoding='utf-8')
+        other = self.root / 'other-client'
+        other.mkdir()
+        (other / 'profiles.yaml').write_text('items: []', encoding='utf-8')
+        self.subs.scan(str(other))
+        self.assertEqual(self.subs.public(), before)
+        (self.client / 'profiles.yaml').write_text('items: []', encoding='utf-8')
+        with self.assertRaisesRegex(PanelError, '列表已在 Clash 中删除'):
+            self.service.refresh(self.id)
+        self.assertEqual(self.subs.public(), [])
+
     def test_refresh_failure_keeps_nodes(self):
         before = self.subs.nodes(self.id)
         with patch('subscriptions.fetch_yaml', side_effect=PanelError('下载超时')):
@@ -89,6 +166,54 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(second.step())
         self.assertEqual(len(set(self.detector.calls)), 2)
         self.assertFalse(second.step())
+
+    def test_progress_records_failures_and_survives_relaunch(self):
+        self.assertEqual(self.service.state(self.id)['activity']['progress'],
+                         {'total': 2, 'completed': 0, 'remaining': 2, 'failed': 0, 'skipped': 0})
+        self.service.step()
+        with patch.object(self.detector, 'check', return_value={
+                'status': 'error', 'checked_at': datetime.now(timezone.utc).isoformat(), 'error': 'timeout'}):
+            self.service.step()
+        expected = {'total': 2, 'completed': 2, 'remaining': 0, 'failed': 1, 'skipped': 0}
+        self.assertEqual(self.service.state(self.id)['activity']['progress'], expected)
+        second = Service(self.root / 'data', Path('unused.exe'), roots=[self.client], start=False,
+                         detector=self.detector, network=FakeNetwork())
+        self.assertEqual(second.state(self.id)['activity']['progress'], expected)
+
+    def test_progress_manual_recheck_and_subscription_scope(self):
+        self.service.step()
+        self.service.step()
+        node = self.subs.nodes(self.id)[0]
+        self.service.enqueue(self.id, node['id'])
+        progress = self.service.state(self.id)['activity']['progress']
+        self.assertEqual((progress['completed'], progress['remaining']), (1, 1))
+        other = next(p['id'] for p in self.subs.public() if p['id'] != self.id)
+        self.assertEqual(self.service.state(other)['activity']['progress']['completed'], 0)
+        self.service.step()
+        self.assertEqual(self.service.state(self.id)['activity']['progress']['completed'], 2)
+
+    def test_progress_expiry_config_change_and_unsupported(self):
+        nodes = self.subs.nodes(self.id)
+        old = datetime.now(timezone.utc) - timedelta(hours=12)
+        attempts = {n['id']: {'status': 'ok', 'checked_at': old.isoformat(), 'fingerprint': n['fingerprint']} for n in nodes}
+        unsupported = dict(nodes[0], id='unsupported', unsupported='unsupported protocol')
+        progress = detection_progress(nodes + [unsupported], attempts, time.time(), {nodes[0]['id']}, DEFAULTS)
+        self.assertEqual(progress, {'total': 2, 'completed': 2, 'remaining': 0, 'failed': 0, 'skipped': 1})
+        nodes[1]['fingerprint'] = 'changed'
+        self.assertEqual(detection_progress(nodes, attempts, time.time(), {nodes[0]['id']}, DEFAULTS)['completed'], 1)
+
+    def test_active_progress_covers_network_setup_and_check(self):
+        def network():
+            activity = self.service.state(self.id)['activity']
+            self.assertEqual(activity['stage']['stage'], 'network')
+            self.assertEqual(activity['active_profile_id'], self.id)
+            self.assertIsNotNone(activity['active_id'])
+            self.assertGreaterEqual(activity['elapsed_seconds'], 0)
+            return 'Ethernet'
+        with patch.object(self.service.network, 'interface', side_effect=network):
+            self.service.step()
+        self.assertIsNone(self.service.state(self.id)['activity']['active_id'])
+        self.assertIsNone(self.service.detector.progress)
 
     def test_pause_blocks_auto_but_manual_queue_works(self):
         self.service.save_settings({'paused': True})
@@ -119,6 +244,11 @@ class ServiceTests(unittest.TestCase):
         self.assertNotEqual(node['fingerprint'], changed['fingerprint'])
         self.assertFalse(self.service.state(self.id)['recommendations']['items'])
         self.assertTrue(is_due(changed, self.service.store.history(node['id'])[0], time.time(), set(), DEFAULTS))
+        self.service.store.add(changed, {'status': 'error', 'checked_at': datetime.now(timezone.utc).isoformat(),
+            'fingerprint': changed['fingerprint'], 'connectivity': {'status': 'ok'}, 'error': '评分查询失败'})
+        state = self.service.state(self.id)
+        self.assertFalse(state['recommendations']['items'])
+        self.assertIsNone(next(n for n in state['nodes'] if n['id'] == changed['id'])['latest'])
 
     def test_rate_limit_stops_following_checks(self):
         with patch.object(self.detector, 'check', return_value={'status': 'error', 'checked_at': datetime.now(timezone.utc).isoformat(),
@@ -132,6 +262,10 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(self.service.step())
         self.assertEqual(self.service.store.snapshot()[1], {})
         self.assertEqual(self.service.message, '没有网络')
+        activity = self.service.state(self.id)['activity']
+        self.assertIsNone(activity['active_id'])
+        self.assertIsNone(activity['stage'])
+        self.assertEqual(activity['progress']['remaining'], 2)
 
     def test_settings_persist(self):
         self.service.save_settings({'paused': True, 'recommendation': {'max_risk': 20, 'regions': ['HK', 'US']}})
@@ -167,7 +301,7 @@ class ServiceTests(unittest.TestCase):
         self.subs.scan()
         self.assertEqual(len(self.subs.nodes(self.id)), 2)
 
-    def test_http_auth_and_no_switch_endpoint(self):
+    def test_http_auth_and_switch_requires_explicit_target(self):
         ui = Path(__file__).resolve().parents[1] / 'ui'
         server = ThreadingHTTPServer(('127.0.0.1',0),handler(self.service, 'test-token', ui))
         thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
@@ -179,7 +313,7 @@ class ServiceTests(unittest.TestCase):
             result=session.get(base+'/api/state',headers=headers)
             self.assertEqual(result.status_code,200)
             self.assertNotIn('secret',result.text)
-            self.assertEqual(session.post(base+'/api/switch',json={},headers=headers).status_code,404)
+            self.assertEqual(session.post(base+'/api/switch',json={},headers=headers).status_code,400)
             headers['Origin']='https://unrelated.invalid'
             self.assertEqual(session.post(base+'/api/check',json={'profile_id':self.id},headers=headers).status_code,403)
         finally:

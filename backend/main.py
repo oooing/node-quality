@@ -7,6 +7,7 @@ import mimetypes
 import os
 from pathlib import Path
 import secrets
+import re
 import sys
 import threading
 from urllib.parse import parse_qs, urlsplit
@@ -41,11 +42,19 @@ def handler(service, token, ui):
                     (not origin or origin == 'http://' + expected) and
                     hmac.compare_digest(self.headers.get('X-App-Token', ''), token))
 
+        def extension_result(self):
+            return (self.path == '/api/ping0/result'
+                    and self.headers.get('Host') == f'127.0.0.1:{self.server.server_port}'
+                    and re.fullmatch(r'chrome-extension://[a-p]{32}', self.headers.get('Origin', '')))
+
         def do_GET(self):
             route = urlsplit(self.path)
-            if route.path in ('/', '/app.js', '/style.css'):
+            if route.path in ('/', '/app.js', '/style.css', '/logo.png', '/favicon.ico'):
                 file = ui / ('index.html' if route.path == '/' else route.path[1:])
-                self.send(file.read_bytes(), content_type=(mimetypes.guess_type(str(file))[0] or 'text/plain') + '; charset=utf-8')
+                content_type = mimetypes.guess_type(str(file))[0] or 'text/plain'
+                if not content_type.startswith('image/'):
+                    content_type += '; charset=utf-8'
+                self.send(file.read_bytes(), content_type=content_type)
                 return
             if not self.authorized():
                 self.send({'error': '请从桌面应用打开。'}, 403)
@@ -55,11 +64,15 @@ def handler(service, token, ui):
                 self.send(service.state(query.get('profile', [None])[0]))
             elif route.path == '/api/history':
                 self.send(service.store.history(query.get('node', [''])[0]))
+            elif route.path == '/api/ping0/history':
+                self.send(service.store.ping0_history(query.get('node', [''])[0]))
+            elif route.path == '/api/control':
+                self.send(service.control.status(query.get('profile', [''])[0]))
             else:
                 self.send({'error': '未找到该功能。'}, 404)
 
         def do_POST(self):
-            if not self.authorized():
+            if not self.authorized() and not self.extension_result():
                 self.send({'error': '请从桌面应用打开。'}, 403)
                 return
             try:
@@ -73,17 +86,49 @@ def handler(service, token, ui):
                     service.save_settings(data)
                 elif self.path == '/api/check':
                     service.enqueue(data.get('profile_id'), data.get('node_id'))
+                elif self.path == '/api/latency':
+                    if not data.get('node_id'):
+                        raise PanelError('请选择要复测的线路。')
+                    service.enqueue(data.get('profile_id'), data['node_id'], latency_only=True)
+                elif self.path == '/api/favorite':
+                    service.favorite(data['node_id'], data['saved'])
+                elif self.path == '/api/ip-ack':
+                    service.store.acknowledge_ip(data['node_id'])
                 elif self.path == '/api/refresh':
                     service.refresh(data['profile_id'])
                 elif self.path == '/api/enable':
                     service.subscriptions.enable(data['ids'])
                 elif self.path == '/api/discover':
+                    before = {p['id'] for p in service.subscriptions.public()}
                     service.subscriptions.scan(data.get('directory'))
+                    after = {p['id'] for p in service.subscriptions.public()}
+                    self.send({'count': len(after), 'removed': len(before - after)})
+                    return
                 elif self.path == '/api/add':
                     service.subscriptions.add(data.get('name'), data.get('url', ''), data.get('text', ''))
                 elif self.path == '/api/clear-queue':
                     with service.lock:
                         service.queue.clear()
+                        service.latency_ids.clear()
+                elif self.path == '/api/switch':
+                    self.send(service.control.select(data.get('profile_id'), data.get('node_id'), data.get('group')))
+                    return
+                elif self.path == '/api/ping0/open':
+                    service.ping0_runner.callback_port = self.server.server_port
+                    self.send(service.open_ping0(data.get('profile_id'), data.get('node_id')))
+                    return
+                elif self.path == '/api/ping0/reopen':
+                    service.ping0_runner.callback_port = self.server.server_port
+                    self.send(service.ping0_runner.open_browser(data.get('job_id')))
+                    return
+                elif self.path == '/api/ping0/result':
+                    self.send(service.ping0_bridge.receive(data))
+                    return
+                elif self.path == '/api/extension-folder':
+                    folder = ui.parent / 'browser-extension'
+                    if not (folder / 'manifest.json').is_file():
+                        raise PanelError('未找到回填扩展，请重新安装客户端。')
+                    os.startfile(str(folder.resolve()))
                 else:
                     self.send({'error': '未找到该功能。'}, 404)
                     return

@@ -6,11 +6,9 @@ import re
 
 
 SHANGHAI = timezone(timedelta(hours=8))
-FRESH_HOURS = 24
+REVIEW_HOURS = 24
 LOW_RISK_THRESHOLD = 30
 RELATIVE_THRESHOLD = 50
-FRESH_HOUR_CHOICES = (6, 24, 72, 168)
-LIMIT_CHOICES = (3, 5, 10, 20)
 
 
 def _time(value):
@@ -45,25 +43,18 @@ def node_region(node):
 
 def normalize_options(options=None):
     """Validate recommendation settings and return independent numeric defaults."""
-    values = {'max_risk': LOW_RISK_THRESHOLD, 'fresh_hours': FRESH_HOURS, 'limit': 3}
+    values = {'max_risk': LOW_RISK_THRESHOLD, 'regions': []}
     if options is not None:
-        if not isinstance(options, dict) or any(key not in (*values, 'regions') for key in options):
-            raise ValueError('推荐设置只能包含 max_risk、fresh_hours、limit 和 regions。')
-        values.update(options)
+        if not isinstance(options, dict) or any(key not in (*values, 'fresh_hours', 'limit') for key in options):
+            raise ValueError('推荐设置无效，请重新保存。')
+        # Older installs saved expiry/display limits. These no longer affect selection.
+        values.update({k: v for k, v in options.items() if k in values})
     if not _score(values['max_risk']):
-        raise ValueError('风险上限必须是 0–100 之间的数值。')
-    for key, choices, message in (
-        ('fresh_hours', FRESH_HOUR_CHOICES, '记录时效必须为 6、24、72 或 168 小时。'),
-        ('limit', LIMIT_CHOICES, '显示数量必须为 3、5、10 或 20。'),
-    ):
-        value = values[key]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value not in choices:
-            raise ValueError(message)
-        values[key] = int(value)
+        raise ValueError('风险上限需填写 0–100 之间的数值。')
     if 'regions' in values:
         regions = values['regions']
         if not isinstance(regions, list) or any(not isinstance(r, str) or not re.fullmatch(r'[A-Z]{2}|UNKNOWN', r) for r in regions):
-            raise ValueError('地区必须为地区代码列表。')
+            raise ValueError('地区选择无效，请重新选择。')
         values['regions'] = list(dict.fromkeys(regions))
     max_risk = values['max_risk']
     values['max_risk'] = int(max_risk) if float(max_risk).is_integer() else max_risk
@@ -100,6 +91,34 @@ def _timeline(node, histories):
             if when is not None and when not in unique:
                 unique[when] = record
     return [unique[when] for when in sorted(unique, reverse=True)][:10]
+
+
+def assess_node(node, now=None):
+    """Separate connection failure from an unavailable rating; never refresh old scores."""
+    now = now or datetime.now(SHANGHAI)
+    attempt = node.get('last_attempt')
+    latest = node.get('latest')
+    if node.get('config_changed') or node.get('unsupported'):
+        return {'state': 'unrated', 'needs_review': False}
+    if attempt and _time(attempt.get('checked_at')) is None:
+        return {'state': 'unrated', 'needs_review': False}
+    if attempt and attempt.get('status') != 'ok':
+        observed = _ip(attempt.get('observed_ip') or node.get('observed_ip'))
+        if observed and latest and observed != latest.get('ip'):
+            return {'state': 'ip_changed', 'needs_review': True}
+        if attempt.get('connectivity', {}).get('status') != 'ok':
+            return {'state': 'connection_failed', 'needs_review': False}
+        state = 'score_pending'
+        record = latest
+    else:
+        state = 'current'
+        record = attempt or latest
+    result = _result(record)
+    if result is None or result['time'] > now:
+        return {'state': state if state == 'score_pending' else 'unrated', 'needs_review': True}
+    if state == 'current' and now - result['time'] >= timedelta(hours=REVIEW_HOURS):
+        state = 'review'
+    return {'state': state, 'needs_review': state != 'current', 'record': record}
 
 
 def _stats(records, current):
@@ -139,7 +158,7 @@ def _candidate(node, record, result, records, category, now):
     elif stats['ip_changes']:
         warnings.append(f"最近记录中出口 IP 变化 {stats['ip_changes']} 次")
     if stats['risk_increases']:
-        warnings.append(f"IPPure 风险值较上次升高：+{stats['risk_increases']['ippure']:g}")
+        warnings.append(f"风险评分较上次升高：+{stats['risk_increases']['ippure']:g}")
     return {'id': node['id'], 'name': node['name'], 'ip': result['ip'],
             'source': 'IPPure', 'scores': result['scores'], 'category': category,
             'label': {'low_risk': '低风险', 'relative': '备选', 'high_risk': '风险偏高'}[category],
@@ -173,6 +192,7 @@ def rank_nodes(nodes, histories, now=None, options=None):
         if node.get('unsupported'):
             counts['unsupported'] += 1
             continue
+        assessment = assess_node(node, now)
         # An undated last attempt must not silently fall back to an older success.
         attempt = node.get('last_attempt')
         if isinstance(attempt, dict) and _time(attempt.get('checked_at')) is None:
@@ -182,14 +202,13 @@ def rank_nodes(nodes, histories, now=None, options=None):
         if not records:
             counts['incomplete'] += 1
             continue
-        record = records[0]
-        if record.get('status') != 'ok':
-            counts['failed'] += 1
+        record = assessment.get('record')
+        if not record:
+            counts['failed' if assessment['state'] == 'connection_failed' else 'incomplete'] += 1
             continue
         age = now - _time(record.get('checked_at'))
-        if age > timedelta(hours=options['fresh_hours']):
+        if assessment['needs_review']:
             counts['stale'] += 1
-            continue
         if age < timedelta(0):
             counts['incomplete'] += 1
             continue
@@ -208,29 +227,29 @@ def rank_nodes(nodes, histories, now=None, options=None):
         if result['scores']['ippure'] > options['max_risk']:
             counts['over_max_risk'] += 1
             continue
-        candidates.append(_candidate(node, record, result, records, category, now))
+        candidate = _candidate(node, record, result, records, category, now)
+        candidate.update(state=assessment['state'], needs_review=assessment['needs_review'])
+        candidates.append(candidate)
     counts['eligible'] = len(candidates)
-    items = sorted(candidates, key=lambda item: (item['scores']['ippure'], *_history_order(item)))[:options['limit']]
+    items = sorted(candidates, key=lambda item: (item['needs_review'], item['scores']['ippure'], *_history_order(item)))
     status = 'ready' if items else 'none'
-    message = (f"在 {options['fresh_hours']} 小时、IPPure 风险 ≤ {options['max_risk']:g} 的范围内"
-               f'找到 {len(candidates)} 个候选，显示 {len(items)} 个。')
+    message = f"找到 {len(candidates)} 条风险 ≤ {options['max_risk']:g} 的线路。"
     if not items:
         selected = options.get('regions', [])
         scope = '、'.join(REGION_NAMES.get(code, '未识别' if code == 'UNKNOWN' else code) for code in selected) if len(selected) <= 3 else '所选地区'
-        scope = scope or '当前订阅'
+        scope = scope or '当前列表'
         if not counts['matching_region']:
-            message = f'{scope}没有节点。'
+            message = f'{scope}没有线路。'
         else:
             reasons = []
             if counts['over_max_risk']:
                 reasons.append(f"{counts['over_max_risk']} 个 IPPure 风险超过 {options['max_risk']:g}（最低 {min(valid_scores):g}）")
-            for key, label in [('stale', f"记录超过 {options['fresh_hours']} 小时"),
-                               ('failed', '最近检测失败'), ('incomplete', '缺少有效检测'),
+            for key, label in [('failed', '连接未确认'), ('incomplete', '尚无可用评分'),
                                ('unsupported', '暂不支持检测')]:
                 if counts[key]:
                     reasons.append(f"{counts[key]} 个{label}")
-            message = f"{scope} {counts['matching_region']} 个节点均未达标：" + '；'.join(reasons) + '。'
+            message = f"{scope} {counts['matching_region']} 条线路暂不符合推荐条件：\n" + '\n'.join(reasons)
     return {'regions': [{'id': code, 'name': REGION_NAMES.get(code, '未识别' if code == 'UNKNOWN' else code)} for code in sorted({node_region(node) for node in nodes})], 'items': items, 'status': status, 'message': message, 'counts': counts, 'source': 'IPPure',
-            'options': options, 'fresh_hours': options['fresh_hours'], 'low_risk_threshold': LOW_RISK_THRESHOLD,
+            'options': options, 'review_hours': REVIEW_HOURS, 'low_risk_threshold': LOW_RISK_THRESHOLD,
             'relative_threshold': RELATIVE_THRESHOLD,
             'generated_at': now.astimezone(SHANGHAI).isoformat(timespec='seconds')}

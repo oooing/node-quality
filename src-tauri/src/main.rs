@@ -53,14 +53,14 @@ fn main() {
             let ready: serde_json::Value = serde_json::from_str(&line).map_err(|_| std::io::Error::other("检测服务启动失败，请查看 NodeQuality/startup.log"))?;
             let url = ready["url"].as_str().ok_or_else(|| std::io::Error::other("检测服务未就绪"))?.parse()?;
             app.manage(owned);
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title("节点优选")
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).title("云鉴")
                 .inner_size(1180.0, 800.0).min_inner_size(780.0, 520.0).build()?;
             Ok(())
         })
         .run(tauri::generate_context!());
     if let Err(error) = result {
-        let message: Vec<u16> = format!("节点优选启动失败：{error}\0").encode_utf16().collect();
-        let title: Vec<u16> = "节点优选\0".encode_utf16().collect();
+        let message: Vec<u16> = format!("云鉴启动失败：{error}\0").encode_utf16().collect();
+        let title: Vec<u16> = "云鉴\0".encode_utf16().collect();
         unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
     }
 }

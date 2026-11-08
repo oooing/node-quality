@@ -11,6 +11,7 @@ $built = Join-Path $PSScriptRoot 'resources/backend-dist/node-quality-service'
 $target = Join-Path $PSScriptRoot 'resources/backend'
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 Copy-Item -Path (Join-Path $built '*') -Destination $target -Recurse -Force
+& (Join-Path $PSScriptRoot 'scripts/build-clash-helper.ps1')
 $cargoArgs = @('--locked')
 if ($Offline) { $cargoArgs += '--offline' }
 cargo tauri build -- @cargoArgs

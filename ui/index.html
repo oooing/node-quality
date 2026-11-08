@@ -1,17 +1,145 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>节点优选</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>云鉴</title><link rel="icon" href="/favicon.ico" sizes="any"><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
 <body>
-<header><div class="brand"><span class="brand-mark" aria-hidden="true">N</span><h1>节点优选</h1></div><select id="profiles" aria-label="当前订阅"></select><button id="subscriptions">订阅</button><div class="spacer"></div><button id="pause">暂停</button><button id="check-all" class="primary">检测全部</button><button id="settings" class="icon" aria-label="推荐与检测设置" title="推荐与检测设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m9 3-.7 2.2-2 .9-2.1-.5-2 3.5 1.5 1.7v2.4L2.2 15l2 3.5 2.1-.5 2 .9L9 21h4l.7-2.1 2-.9 2.1.5 2-3.5-1.5-1.8v-2.4l1.5-1.7-2-3.5-2.1.5-2-.9L13 3Z"/><circle cx="11" cy="12" r="3.2"/></svg></button></header>
+<header><div class="brand"><img class="brand-mark" src="/logo.png" width="32" height="32" alt=""><h1>云鉴</h1></div><nav class="view-tabs" aria-label="页面"><button id="view-lines" aria-current="page">查看线路</button><button id="view-favorites">我的收藏</button></nav><div class="source-picker" role="group" aria-label="客户端与订阅"><select id="clients" aria-label="客户端"></select><span class="source-chevron" aria-hidden="true">›</span><select id="profiles" aria-label="原订阅名称"></select></div><div class="spacer"></div><button id="pause" class="auto-toggle" type="button" role="switch" aria-checked="false" aria-label="自动检测" title="关闭后停止后续自动检测，当前检测仍会完成。" disabled><span>自动检测</span><span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span></button><button id="check-all" class="primary">全部检测</button><button id="settings" class="settings-entry" aria-label="设置"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+  <circle cx="12" cy="12" r="3" />
+</svg>
+<span>设置</span></button></header>
 <main>
-<div id="statusbar" role="status"><span class="dot"></span><span id="status">正在读取订阅…</span><span class="spacer"></span><span id="updated"></span><button id="refresh" class="text">更新订阅</button></div>
+<div id="ip-change-notice" class="ip-change-notice" role="alert" hidden><strong id="ip-change-text"></strong><button id="view-ip-changes" class="text">查看变化</button></div>
+<div id="detection" data-state="idle"><div id="statusbar"><span id="status-icon" class="dot" aria-hidden="true"></span><span id="status" role="status">正在读取线路…</span><span id="elapsed" hidden></span><span class="spacer"></span><span id="updated"></span><button id="refresh" class="text">更新线路</button></div><div id="progress-area" hidden><div class="progress-meta"><span id="progress-count"></span><span id="progress-detail"></span></div><progress id="progress" value="0" max="1" aria-label="线路列表检测进度"></progress></div></div>
 <div id="notice" class="notice" hidden></div>
-<section id="onboarding" class="welcome" hidden><h2>添加第一份订阅</h2><p>没有发现 Clash 订阅。粘贴链接、导入 YAML，或指定 Clash 配置目录。</p><button id="welcome-add" class="primary">添加订阅</button></section>
-<section id="results"><div class="section-title"><h2>候选节点 <span id="candidate-count">0</span></h2><span id="scope"></span></div><p id="empty" class="empty" hidden></p><div id="candidates" class="grid"></div><details id="others"><summary>其他节点 <span id="other-count">0</span></summary><input id="search" type="search" placeholder="搜索节点" aria-label="搜索其他节点"><div id="other-grid" class="grid"></div></details></section>
-<footer><span>独立检测 · 不切换当前节点</span><span id="footer-status">IPPure · 最近 10 次记录</span></footer>
+<section id="onboarding" class="welcome" hidden><h2>添加列表</h2><p>还没找到线路。打开 Clash 同步，或自行添加链接。</p><button id="welcome-add" class="primary">添加列表</button></section>
+<section id="results"><div class="section-title"><h2>推荐线路 <span id="candidate-count">0</span></h2><span id="scope"></span></div><p id="empty" class="empty" hidden></p><div id="candidates" class="grid"></div><details id="others"><summary>其他线路 <span id="other-count">0</span></summary><div id="clash-control"><div class="clash-fields"><span>切换分组</span><select id="clash-group" aria-label="选择要更换线路的分组"></select><button id="clash-refresh" class="text">刷新分组</button></div><p id="clash-note" class="hint"></p></div><input id="search" type="search" placeholder="搜索线路" aria-label="搜索其他线路"><div id="other-grid" class="grid"></div></details></section>
+<section id="favorites-page" hidden><div id="favorites-grid"></div><p id="favorites-empty" class="empty">还没有收藏。右键线路卡片即可收藏。</p></section>
+
 </main>
-<dialog id="settings-dialog"><div class="dialog-head"><h2>推荐与检测</h2><button class="close icon" aria-label="关闭">×</button></div><form id="settings-form"><div class="form-grid"><label>风险上限<input id="max-risk" type="number" min="0" max="100" required></label><label>有效记录<select id="fresh-hours"><option value="6">6 小时内</option><option value="24">24 小时内</option><option value="72">3 天内</option><option value="168">7 天内</option></select></label><label>候选数量<select id="limit"><option>3</option><option>5</option><option>10</option><option>20</option></select></label></div><div class="field-head"><span>地区</span><button id="clear-regions" type="button" class="text">清空选择</button></div><div id="regions" class="chips"></div><p class="hint">不选地区即不限。先筛选有效、可用且达标的记录，再按风险从低到高排序，同分参考近期稳定性。</p><hr><div class="form-grid"><label>订阅更新<select id="update-hours"><option value="6">每 6 小时</option><option value="12">每 12 小时</option><option value="24">每天</option><option value="48">每 2 天</option></select></label><label>候选复检<select id="candidate-hours"><option value="6">每 6 小时</option><option value="12">每 12 小时</option><option value="24">每天</option><option value="48">每 2 天</option></select></label><label>其他节点<select id="other-hours"><option value="6">每 6 小时</option><option value="12">每 12 小时</option><option value="24">每天</option><option value="48">每 2 天</option></select></label></div><p class="hint">应用打开时按计划运行，关闭后停止，下次打开继续。每次只检测一个节点，不测大流量下载。</p><div class="dialog-actions"><button type="submit" class="primary">保存</button></div></form></dialog>
-<dialog id="subscriptions-dialog"><div class="dialog-head"><h2>订阅</h2><button class="close icon" aria-label="关闭">×</button></div><p class="hint">勾选后自动更新和检测；只读取 Clash，不更改原配置。</p><div id="subscription-list"></div><div class="dialog-actions"><button id="rescan">重新发现</button><button id="save-subscriptions" class="primary">保存选择</button></div><hr><form id="add-form"><label>订阅名称<input id="add-name" placeholder="可选"></label><label>订阅链接<input id="add-url" type="url" placeholder="https://…" autocomplete="off" spellcheck="false"></label><div class="dialog-actions"><label class="file-button">导入 YAML<input id="file" type="file" accept=".yaml,.yml"></label><button class="primary" type="submit">添加</button></div></form><details class="advanced"><summary>指定 Clash 配置目录</summary><div class="inline"><input id="directory" placeholder="包含 profiles.yaml 的文件夹" aria-label="Clash 配置目录"><button id="scan-directory">读取</button></div></details></dialog>
-<dialog id="history-dialog"><div class="dialog-head"><h2 id="history-title">历史记录</h2><button class="close icon" aria-label="关闭">×</button></div><div id="history-content"></div></dialog>
-<dialog id="risk-dialog"><div class="dialog-head"><h2>IPPure 风险值</h2><button class="close icon" aria-label="关闭">×</button></div><p>0–100，越低越好。它是 IP 风险指标，不代表被封禁的概率，也不等于连接速度。</p><div class="risk-tiers"><span>0–15</span><strong>极度纯净</strong><span>＞15–25</span><strong>纯净</strong><span>＞25–40</span><strong>中性</strong><span>＞40–50</span><strong>轻度风险</strong><span>＞50–70</span><strong>中度风险</strong><span>＞70–100</span><strong>极度风险</strong></div><p class="hint">分级按 IPPure 当前展示规则。推荐风险上限是你自己的筛选条件，默认 30。</p></dialog>
-<div id="toast" role="status" hidden></div>
+<dialog id="settings-dialog" class="settings-center" aria-labelledby="settings-title">
+<div class="dialog-head"><h2 id="settings-title">设置</h2><button class="close icon" aria-label="关闭"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M18 6 6 18" />
+  <path d="m6 6 12 12" />
+</svg>
+</button></div>
+<div class="settings-layout"><nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical"><button type="button" role="tab" id="tab-sources" aria-controls="panel-sources" data-page="sources"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect x="16" y="16" width="6" height="6" rx="1" />
+  <rect x="2" y="16" width="6" height="6" rx="1" />
+  <rect x="9" y="2" width="6" height="6" rx="1" />
+  <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3" />
+  <path d="M12 12V8" />
+</svg>
+线路管理</button><button type="button" role="tab" id="tab-recommend" aria-controls="panel-recommend" data-page="recommend"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <line x1="21" x2="14" y1="4" y2="4" />
+  <line x1="10" x2="3" y1="4" y2="4" />
+  <line x1="21" x2="12" y1="12" y2="12" />
+  <line x1="8" x2="3" y1="12" y2="12" />
+  <line x1="21" x2="16" y1="20" y2="20" />
+  <line x1="12" x2="3" y1="20" y2="20" />
+  <line x1="14" x2="14" y1="2" y2="6" />
+  <line x1="8" x2="8" y1="10" y2="14" />
+  <line x1="16" x2="16" y1="18" y2="22" />
+</svg>
+推荐设置</button><button type="button" role="tab" id="tab-automatic" aria-controls="panel-automatic" data-page="automatic"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <circle cx="12" cy="12" r="10" />
+  <polyline points="12 6 12 12 16 14" />
+</svg>
+自动检测</button></nav><div class="settings-content">
+<section id="panel-sources" role="tabpanel" aria-labelledby="tab-sources"><h3>检测范围</h3><p class="hint">选择要自动检测的列表，可多选，保存后生效。</p><div class="source-columns" aria-hidden="true"><span>线路列表</span><span>自动检测</span></div><div id="subscription-list"></div><div class="dialog-actions"><button id="rescan">同步列表</button><button id="save-subscriptions" class="primary">保存选择</button></div><details class="add-source"><summary>添加列表</summary><form id="add-form"><label>列表名称<input id="add-name" placeholder="可以不填"></label><label>导入链接<input id="add-url" type="url" placeholder="粘贴服务商提供的线路链接" autocomplete="off" spellcheck="false"></label><div class="dialog-actions"><label class="file-button">导入文件<input id="file" type="file" accept=".yaml,.yml"></label><button class="primary" type="submit">添加</button></div></form></details><details class="advanced"><summary>手动查找</summary><div class="inline"><input id="directory" placeholder="填写 Clash 配置文件夹的路径" aria-label="Clash 配置目录"><button id="scan-directory">读取列表</button></div></details></section>
+<form id="settings-form"><section id="panel-recommend" role="tabpanel" aria-labelledby="tab-recommend"><h3>推荐条件</h3><div class="form-grid"><label>风险上限<input id="max-risk" type="number" min="0" max="100" required><small class="field-note">只推荐不高于此分数的线路</small></label></div><div class="field-head"><span>地区</span><button id="clear-regions" type="button" class="text">清空选择</button></div><div id="regions" class="chips"></div><p class="region-help">可以多选，不选则不限地区。</p><p class="hint">优先展示近期确认的低风险线路，同分看历史；不按速度排序。</p></section><section id="panel-automatic" role="tabpanel" aria-labelledby="tab-automatic"><h3>检测安排</h3><label class="daily-toggle"><span>自动检测</span><input id="auto-enabled" type="checkbox" role="switch"></label><p class="hint">每天更新列表和检测一次，新线路优先检测。</p><p class="hint">应用关闭后停止，下次打开继续；不会更换正在使用的线路。</p><details class="advanced"><summary>网页助手</summary><p class="hint">首次使用请安装网页助手；已有旧版请更新。验证后自动保存。</p><button id="extension-folder" type="button">打开文件</button></details></section><div class="dialog-actions"><button type="submit" class="primary" id="save-settings">保存设置</button></div></form>
+</div></div></dialog>
+<dialog id="history-dialog"><div class="dialog-head"><h2 id="history-title">检测记录</h2><button class="close icon" aria-label="关闭"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M18 6 6 18" />
+  <path d="m6 6 12 12" />
+</svg>
+</button></div><div id="history-content"></div></dialog>
+<dialog id="risk-dialog"><div class="dialog-head"><h2>评分说明</h2><button class="close icon" aria-label="关闭"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M18 6 6 18" />
+  <path d="m6 6 12 12" />
+</svg>
+</button></div><p>IPPure 评分为 0–100，越低越好；不代表封禁概率或连接速度。</p><div class="risk-tiers"><span>0–15</span><strong>极度纯净</strong><span>＞15–25</span><strong>纯净</strong><span>＞25–40</span><strong>中性</strong><span>＞40–50</span><strong>轻度风险</strong><span>＞50–70</span><strong>中度风险</strong><span>＞70–100</span><strong>极度风险</strong></div><p class="hint">等级来自 IPPure；推荐的风险上限可自行设置，默认 30。</p></dialog>
+<dialog id="ping0-dialog"><div class="dialog-head"><h2>评分说明</h2><button class="close icon" aria-label="关闭"><svg aria-hidden="true" class="lucide"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M18 6 6 18" />
+  <path d="m6 6 12 12" />
+</svg>
+</button></div><p>Ping0 评分为 0–100%，越低越好，不代表封禁概率。两家评分分别显示。</p><p class="hint">补充检测使用上次测得的 IP；想确认最新地址，请先点“检测”。</p></dialog><dialog id="ip-change-dialog"><div class="dialog-head"><h2>IP 已变化</h2><button class="close icon" aria-label="关闭">×</button></div><div id="ip-change-content"></div></dialog><div id="node-menu" class="node-menu" role="menu" aria-label="线路操作" hidden></div><div id="toast" role="status" hidden></div>
 </body></html>

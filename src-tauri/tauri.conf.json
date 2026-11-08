@@ -1,16 +1,50 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "节点优选",
-  "version": "0.1.0",
+  "productName": "云鉴",
+  "version": "0.2.9",
   "identifier": "site.oooing.nodequality",
-  "build": {"frontendDist": "../ui"},
-  "app": {"windows": [], "security": {"csp": null}},
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
-    "resources": {"../resources/engine/": "engine/", "../resources/backend/": "backend/", "../resources/licenses/": "licenses/", "../ui/": "ui/", "../LICENSE": "licenses/NodeQuality-GPL-3.0.txt", "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"},
-    "shortDescription": "独立检测订阅节点的连通性与 IP 风险",
-    "windows": {"webviewInstallMode": {"type": "downloadBootstrapper", "silent": true}, "nsis": {"installMode": "currentUser", "languages": ["SimpChinese"], "displayLanguageSelector": false}}
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../resources/engine/": "engine/",
+      "../resources/backend/": "backend/",
+      "../resources/licenses/": "licenses/",
+      "../ui/": "ui/",
+      "../LICENSE": "licenses/NodeQuality-GPL-3.0.txt",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../browser-extension/": "browser-extension/"
+    },
+    "shortDescription": "检测线路连通性与 IP 风险，帮你选好线路",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "installerHooks": "windows/branding.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

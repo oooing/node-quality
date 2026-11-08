@@ -32,4 +32,4 @@ class Network:
             return value['name']
         except (OSError, ValueError, subprocess.SubprocessError):
             self.value = None
-            raise PanelError('没有确认到可用的物理网卡，自动检测暂缓。请检查 Wi-Fi 或有线网络。') from None
+            raise PanelError('暂未找到可用网络，检测已暂停。请检查 Wi-Fi 或网线。') from None

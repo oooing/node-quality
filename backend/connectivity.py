@@ -8,11 +8,13 @@ TARGETS = ('https://cp.cloudflare.com/generate_204', 'https://www.gstatic.com/ge
 TIMEOUT_MS = 5000
 
 
-def check_connectivity(control, port, name):
+def check_connectivity(control, port, name, on_attempt=None):
     result = {'status': 'error', 'delay_ms': None,
               'checked_at': datetime.now(timezone(timedelta(hours=8))).isoformat(timespec='milliseconds'),
               'timeout_ms': TIMEOUT_MS, 'attempts': []}
-    for target in TARGETS:
+    for index, target in enumerate(TARGETS):
+        if on_attempt:
+            on_attempt(index + 1)
         attempt = {'url': target, 'status': 'error'}
         try:
             response = control.get(f'http://127.0.0.1:{port}/proxies/{quote(name, safe="")}/delay',
