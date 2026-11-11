@@ -1,6 +1,14 @@
 param([switch]$Offline)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+if (-not (Test-Path -LiteralPath 'frontend/node_modules/.package-lock.json')) {
+    $npmArgs = @('--prefix', 'frontend', 'ci', '--no-audit', '--no-fund')
+    if ($Offline) { $npmArgs += '--offline' }
+    & npm @npmArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
+}
+npm --prefix frontend run build
+if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
 if (-not (Test-Path -LiteralPath 'resources/engine/mihomo.exe')) {
     throw 'Missing engine. Run: python scripts/fetch_engine.py'
 }

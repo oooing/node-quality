@@ -10,13 +10,15 @@ import secrets
 import re
 import sys
 import threading
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from catalog import PanelError
 from service import Service
 
 
 def handler(service, token, ui):
+    ui = Path(ui).resolve()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -28,7 +30,9 @@ def handler(service, token, ui):
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
+            # Astryx/StyleX uses inline style values for layout and progress.
+            # JavaScript remains restricted to local, bundled scripts.
+            self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
             self.end_headers()
             try:
                 self.wfile.write(body)
@@ -49,12 +53,25 @@ def handler(service, token, ui):
 
         def do_GET(self):
             route = urlsplit(self.path)
-            if route.path in ('/', '/app.js', '/style.css', '/logo.png', '/favicon.ico'):
-                file = ui / ('index.html' if route.path == '/' else route.path[1:])
-                content_type = mimetypes.guess_type(str(file))[0] or 'text/plain'
-                if not content_type.startswith('image/'):
+            path = unquote(route.path)
+            if path in ('/', '/index.html', '/app.js', '/style.css', '/logo.png', '/favicon.ico') or path.startswith('/assets/'):
+                file = (ui / ('index.html' if path == '/' else path[1:])).resolve()
+                root = ui / 'assets' if path.startswith('/assets/') else ui
+                if not file.is_relative_to(root) or not file.is_file():
+                    self.send({'error': '未找到页面资源。'}, 404)
+                    return
+                # Windows registry MIME overrides can misidentify JS modules.
+                content_type = {'.js': 'text/javascript', '.mjs': 'text/javascript',
+                                '.css': 'text/css', '.html': 'text/html'}.get(file.suffix.lower())
+                content_type = content_type or mimetypes.guess_type(str(file))[0] or 'application/octet-stream'
+                if content_type.startswith('text/'):
                     content_type += '; charset=utf-8'
-                self.send(file.read_bytes(), content_type=content_type)
+                try:
+                    body = file.read_bytes()
+                except OSError:
+                    self.send({'error': '未找到页面资源。'}, 404)
+                    return
+                self.send(body, content_type=content_type)
                 return
             if not self.authorized():
                 self.send({'error': '请从桌面应用打开。'}, 403)
@@ -86,6 +103,8 @@ def handler(service, token, ui):
                     service.save_settings(data)
                 elif self.path == '/api/check':
                     service.enqueue(data.get('profile_id'), data.get('node_id'))
+                elif self.path == '/api/check-batch':
+                    service.enqueue_batch(data.get('groups'))
                 elif self.path == '/api/latency':
                     if not data.get('node_id'):
                         raise PanelError('请选择要复测的线路。')
@@ -107,9 +126,7 @@ def handler(service, token, ui):
                 elif self.path == '/api/add':
                     service.subscriptions.add(data.get('name'), data.get('url', ''), data.get('text', ''))
                 elif self.path == '/api/clear-queue':
-                    with service.lock:
-                        service.queue.clear()
-                        service.latency_ids.clear()
+                    service.clear_queue()
                 elif self.path == '/api/switch':
                     self.send(service.control.select(data.get('profile_id'), data.get('node_id'), data.get('group')))
                     return

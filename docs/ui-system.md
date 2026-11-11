@@ -1,13 +1,49 @@
-# UI conventions
+# 云鉴界面规范 · 0.3.1
 
-The compact desktop interface uses locally maintained HTML controls and shared CSS tokens. The visual hierarchy follows the neutral, compact approach of shadcn/ui Nova; this is not a React/shadcn installation.
+正式界面使用 React 19、Astryx 0.7.11、Neutral 主题和 Lucide React 图标，沿用第 08 版侧栏布局。`frontend/` 是可维护源代码；Vite 输出至 `ui/`，由本地 Python 服务提供给 Tauri。演示与旧界面不参与运行。
 
-- One settings center: node sources, recommendation preferences, automatic checks.
-- Native dialog, form, select and checkbox semantics; keyboard-operated settings tabs.
-- Lucide 0.468.0 SVG source embedded in index.html; license bundled with the installer. No CDN or icon runtime.
-- Existing CSS transitions only, with reduced-motion support. No Motion runtime is needed for these interactions.
-- Existing state and scheduler retained. No duplicate state manager, layout or drag dependency is introduced without a corresponding feature.
-- Source selection means inclusion in automatic checks, never changing the active Clash subscription.
-- Sources removed from a readable Clash list leave the active picker and automatic jobs; historical results remain. Startup, periodic discovery, and explicit reload synchronize deletions. Unreadable configuration files do not imply deletion.
+## 入口与范围
 
-Keep node cards at 132px. Reuse the shared control classes, semantic color variables and one icon source for new UI.
+| 位置 | 职责 |
+| --- | --- |
+| 左侧“线路”“收藏” | 查看当前列表，或跨列表查看收藏 |
+| 左侧客户端与原列表名称 | 改变查看范围，不切换 Clash 订阅或线路 |
+| 左下“线路管理” | 同步、导入和查找线路列表 |
+| 顶部“自动计划” | 集中设置启停及参加自动更新、检测的列表 |
+| 推荐标题旁齿轮 | 设置地区和风险上限；标题直接显示当前规则 |
+| 检测范围与数量按钮 | 当前列表 / 筛选推荐；收藏页为全部收藏 / 搜索结果 |
+| 线路“详情” | 历史、IP 变化、诊断、评分说明、Ping0 补测、延迟复测 |
+
+“自动计划”暂停时显示“计划暂停”；未选列表时显示“未选列表”。收藏不被推荐条件隐藏。检测按钮数量对应当前所选范围内可检测线路；批量同步后按最新列表解析实际任务，已有排队任务去重。同步时按钮显示“同步中”。
+
+进度条统计当前列表；收藏页标明具体列表名称。检测中的线路若来自其他列表，需说明来源。“清空排队”只清除等待中的手动任务，不中断当前检测、不暂停自动计划。
+
+## 视觉与交互
+
+- 紧凑卡片优先展示线路名称、IP、评分和操作；推荐全部展开，其他线路可折叠。
+- 首选推荐与“使用中”表达不同含义；使用状态只出现一次，按钮文字保持可读对比度。
+- 同一功能只保留一处主要入口。用布局分组，避免额外说明标签堆叠。
+- 按钮、对话框、提示等复用 Astryx；原生表单保留标签和键盘语义。图标统一使用 Lucide React，不混入另一套图标库。
+- 异步操作展示进行中、完成或失败结果；失败保留服务返回的具体原因。关闭对话框后回到触发位置，避免轮询打断输入。
+- CSS 负责轻量过渡，并支持 `prefers-reduced-motion`；没有新增 Motion、拖拽、布局或全局状态库。
+
+## 实现边界
+
+- 后端提供推荐、历史、自动计划与检查队列的真实状态；前端不复制一套评分或调度算法，不使用演示结果替代真实接口。
+- 检测使用独立引擎，不改变正式 Clash 的当前线路；只有用户主动“换用”才调用官方界面并核验保存。
+- 可读取的源列表删除时同步移除选项与自动任务，保留历史。读取失败不等同删除。
+- 所有界面资源在本地打包，不依赖 CDN。API 保留本地令牌和来源验证；样式允许 Astryx/StyleX 的内联动态值，脚本仍只允许本地来源。
+- 依赖版本固定在 `frontend/package-lock.json`。新增组件先复用 Astryx；依赖必须对应实际功能，不叠加重复组件体系。
+
+## 验证
+
+先运行 `npm --prefix frontend run build`，再运行 `python tests/acceptance_astryx.py`。该脚本使用模拟服务验证新版界面，不访问真实线路。`tests/test_static_ui.py` 验证静态资源和 API 边界。
+
+`acceptance_ui.py` 与 `acceptance_favorites.py` 是旧界面的验收脚本，保留作参考，不能用其通过结果证明新版界面已验证。真实安装、真实 Clash 换用与重启保存仍需分别记录验收结果。
+
+推荐规则集中在“推荐线路”标题旁，显示当前风险上限、地区和排序偏好；齿轮是唯一推荐设置入口。顶部仅保留名称/IP搜索，移除重复筛选按钮与风险、地区标签，重置放在推荐设置弹窗内。
+
+
+## 顶部任务入口（0.3.3）
+
+进度统一放在顶部“后台检测”中。点开按列表查看；无任务时显示“检测记录”。当前查看列表不改变后台任务范围。完成列表不显示进度条，新列表不继承旧完成率。数量沿用调度的近 24 小时检查覆盖范围，明确包含失败。

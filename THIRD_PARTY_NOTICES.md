@@ -6,7 +6,10 @@ The application source is licensed under **GPL-3.0-only**, except where an inclu
 
 | Component | Use | License / source |
 | --- | --- | --- |
-| Lucide 0.468.0 | Five SVG icons embedded locally; no runtime package | [ISC license](resources/licenses/Lucide-LICENSE), [source](https://github.com/lucide-icons/lucide/tree/0.468.0/icons) |
+| Astryx / Neutral 0.7.11 | React UI components and theme | MIT; [frontend license inventory](resources/licenses/frontend/README.md), [source](https://github.com/meta/astryx) |
+| React / React DOM 19.3.1 | UI runtime | MIT; [license](resources/licenses/frontend/react-LICENSE.txt), [source](https://github.com/facebook/react) |
+| StyleX 0.19.1 | Astryx styling runtime | MIT; [license](resources/licenses/frontend/stylexjs-stylex-LICENSE.txt), [source](https://github.com/facebook/stylex) |
+| Lucide React 1.18.0 | Unified UI icons | ISC; [license](resources/licenses/frontend/lucide-react-LICENSE.txt), [source](https://github.com/lucide-icons/lucide) |
 | Mihomo v1.19.32 | Separate engine process; unmodified upstream binary downloaded during setup | [GPL v3](resources/licenses/Mihomo-GPL-3.0.txt), [source](https://github.com/MetaCubeX/mihomo/tree/v1.19.32), [source archive](https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.32.zip) |
 | Tauri 2 / plugins | Native Windows shell | MIT or Apache-2.0; [Tauri MIT license](resources/licenses/Tauri-LICENSE-MIT.txt), [source](https://github.com/tauri-apps/tauri) |
 | Python 3.13 | Packaged backend runtime | [Python license](resources/licenses/Python-LICENSE.txt) |
@@ -17,6 +20,8 @@ The application source is licensed under **GPL-3.0-only**, except where an inclu
 | charset-normalizer | Encoding detection | [MIT](resources/licenses/charset-normalizer-LICENSE) |
 | certifi | TLS trust roots | [MPL-2.0](resources/licenses/certifi-LICENSE) |
 | PyInstaller | Backend packaging | [GPL with distribution exception](resources/licenses/pyinstaller-COPYING.txt) |
+
+The 0.3.0 frontend runtime dependency versions, original license texts, origins and SHA-256 hashes are recorded in [the frontend inventory](resources/licenses/frontend/README.md) and [manifest](resources/licenses/frontend/manifest.json). These files are bundled with the installer. Most texts are copied unchanged from installed npm packages. Astryx core and StyleX omit a package-level LICENSE in these releases; their MIT texts were retrieved from their official source repositories on 2026-11-09. Vite 7.3.7 is a build tool, not a runtime dependency shipped in the web bundle. All resolved frontend versions are locked in `frontend/package-lock.json`. Historical Lucide SVG license files remain for archived interfaces.
 
 Rust dependency versions are recorded in `src-tauri/Cargo.lock`. Their original licenses remain applicable. Python build dependencies are recorded in `requirements.txt`.
 

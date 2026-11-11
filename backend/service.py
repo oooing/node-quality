@@ -75,6 +75,8 @@ class Service:
         self.latency_ids = set()
         self.active_kind = None
         self.refresh_queue = deque()
+        self.batch_queue = deque()
+        self.active_batch = None
         self.stop_event, self.wake = threading.Event(), threading.Event()
         self.active, self.updating = None, None
         self.active_started = None
@@ -137,6 +139,69 @@ class Service:
             raise PanelError('线路已不在列表中，请刷新。')
         profile = next(p for p in self.subscriptions.public() if p['id'] == node['profile_id'])
         self.store.set_favorite(node | {'profile_name':profile['name'],'client':profile.get('origin','其他来源')}, saved)
+
+    def enqueue_batch(self, groups):
+        """Resolve whole-list jobs after refresh; selected jobs never widen scope."""
+        if not isinstance(groups, list) or not groups:
+            raise PanelError('请选择要检测的列表或线路。')
+        profiles = {p['id'] for p in self.subscriptions.public()}
+        jobs = {}
+        for group in groups:
+            if not isinstance(group, dict) or group.get('profile_id') not in profiles:
+                raise PanelError('列表不存在，请同步列表。')
+            key, ids = group['profile_id'], group.get('node_ids')
+            if ids is not None and (not isinstance(ids, list) or not ids or
+                                    any(not isinstance(i, str) for i in ids)):
+                raise PanelError('请选择要检测的线路。')
+            if key in jobs:
+                raise PanelError('检测列表重复。')
+            jobs[key] = {'profile_id': key, 'node_ids': None if ids is None else set(ids), 'cancelled': False}
+        with self.lock:
+            pending = {j['profile_id'] for j in self.batch_queue}
+            if self.active_batch:
+                pending.add(self.active_batch['profile_id'])
+            self.batch_queue.extend(job for key, job in jobs.items() if key not in pending)
+        self.wake.set()
+
+    def clear_queue(self):
+        with self.lock:
+            self.queue.clear()
+            self.latency_ids.clear()
+            self.batch_queue.clear()
+            if self.active_batch:
+                self.active_batch['cancelled'] = True
+
+    def prepare_batch(self, job):
+        key = job['profile_id']
+        self.updating, self.message = key, ''
+        try:
+            self.subscriptions.scan()
+            profile = next((p for p in self.subscriptions.public() if p['id'] == key), None)
+            if not profile:
+                self.message = '列表已移除，本次未安排检测。'
+                return
+            self.subscriptions.refresh(key, UPDATE_HOURS)
+            profile = next((p for p in self.subscriptions.public() if p['id'] == key), None)
+            if not profile or profile.get('error'):
+                self.message = '列表更新失败，本次未安排检测；已有记录已保留。'
+                return
+            nodes = self.subscriptions.nodes(key)
+            selected = [n for n in nodes if not n['unsupported'] and
+                        (job['node_ids'] is None or n['id'] in job['node_ids'])]
+            with self.lock:
+                if job['cancelled']:
+                    return
+                existing = set(self.queue)
+                for node in selected:
+                    if node['id'] not in existing:
+                        self.queue.append(node['id'])
+                        existing.add(node['id'])
+                    self.latency_ids.discard(node['id'])
+                if not selected:
+                    self.message = '列表已同步，没有可检测的线路。'
+        finally:
+            with self.lock:
+                self.updating = self.active_batch = None
 
     def refresh(self, profile_id):
         self.subscriptions.scan()
@@ -201,7 +266,24 @@ class Service:
             pending = (set(self.queue) - self.latency_ids) | ({self.active['id']} if self.active and self.active_kind != 'latency' else set())
             progress = detection_progress(nodes, attempts, time.time(),
                                           {row['id'] for row in recommendations['items']}, self.settings, pending)
-            return {'version': '0.2.9', 'profiles': profiles, 'profile_id': profile_id, 'nodes': public,
+            # Each summary belongs to its own source, independent of the viewed list.
+            summaries = []
+            queued = set(self.queue)
+            batches = {j['profile_id'] for j in self.batch_queue}
+            if self.active_batch:
+                batches.add(self.active_batch['profile_id'])
+            for profile in profiles:
+                members = [n for n in all_nodes if n['profile_id'] == profile['id']]
+                coverage = detection_progress(members, attempts, time.time(), set(), self.settings, pending)
+                records = [attempts[n['id']] for n in members if n['id'] in attempts
+                           and attempts[n['id']].get('fingerprint') == n['fingerprint']]
+                summaries.append({'profile_id': profile['id'], 'name': profile['name'],
+                                  'enabled': profile['enabled'], **coverage,
+                                  'active': bool(self.active and self.active['profile_id'] == profile['id']),
+                                  'queued': sum(n['id'] in queued for n in members),
+                                  'syncing': self.updating == profile['id'] or profile['id'] in batches,
+                                  'checked_at': max((r['checked_at'] for r in records), default=None)})
+            return {'version': '0.3.3', 'profiles': profiles, 'profile_id': profile_id, 'nodes': public,
                     'settings': dict(self.settings), 'recommendations': recommendations,
                     'favorites':favorite_nodes,
                     'ping0_jobs': self.ping0_bridge.recent(profile_id),
@@ -211,9 +293,11 @@ class Service:
                                  'active_profile_id': self.active['profile_id'] if self.active else None,
                                  'elapsed_seconds': round(time.monotonic() - self.active_started, 1)
                                  if self.active_started is not None else 0,
-                                 'progress': progress,
+                                 'progress': progress, 'lists': summaries,
                                  'wait_seconds': max(0, self.next_check_at - time.time()),
                                  'queued': list(self.queue), 'updating': self.updating,
+                                 'batch_profiles': [j['profile_id'] for j in self.batch_queue] +
+                                     ([self.active_batch['profile_id']] if self.active_batch else []),
                                  'stage': self.detector.progress, 'finished': self.finished,
                                  'message': self.message, 'cooldown_until': self.cooldown_until,
                                  'interface': self.network.value}}
@@ -223,8 +307,13 @@ class Service:
         with self.lock:
             manual = self.queue.popleft() if self.queue else None
             latency_only = manual in self.latency_ids
-            refresh = self.refresh_queue.popleft() if self.refresh_queue and not manual else None
+            batch = self.batch_queue.popleft() if self.batch_queue and not manual else None
+            self.active_batch = batch
+            refresh = self.refresh_queue.popleft() if self.refresh_queue and not manual and not batch else None
             paused = self.settings['paused']
+        if batch:
+            self.prepare_batch(batch)
+            return True
         profiles = self.subscriptions.public()
         if not manual and not refresh and not paused:
             refresh = next((p['id'] for p in profiles if p['enabled'] and p['mode'] != 'file'
@@ -306,8 +395,11 @@ class Service:
                 self.message = '本轮任务未完成，已保存的结果不受影响；稍后重试。'
                 self.cooldown_until = time.time() + 60
                 worked = False
-            self.next_check_at = time.time() + (3 if worked else 5)
-            self.wake.wait(3 if worked else 5)
+            # Risk requests pace themselves; preparation, failed connections and
+            # latency-only checks do not need a blanket post-task sleep.
+            wait = 0 if worked else 5
+            self.next_check_at = time.time() + wait
+            self.wake.wait(wait)
             self.wake.clear()
             self.next_check_at = 0
 

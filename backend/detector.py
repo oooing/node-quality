@@ -57,13 +57,24 @@ class Detector:
         self.progress = None
         self.interface = None
         self.interface_index = None
+        self._dns_cache = None
+        self._last_risk_started = None
+        self._phase = None
+        self._phase_started = None
+        self._timings = {}
 
     def stage(self, name, **details):
+        now = time.monotonic()
+        if self._phase_started is not None:
+            self._timings[self._phase] = self._timings.get(self._phase, 0) + now - self._phase_started
+        self._phase, self._phase_started = name, now
         self.progress = dict(self.progress or {}, stage=name, **details)
 
     def check(self, node, manual=False, latency_only=False):
         # Keep the former manual argument compatible; checks now use IPPure only.
         started = time.monotonic()
+        self._timings = {}
+        self._phase, self._phase_started = 'starting', started
         record = {'checked_at': datetime.now(SHANGHAI).isoformat(timespec='milliseconds'), 'status': 'error'}
         self.progress = {'node_id': node.get('id'), 'stage': 'starting'}
         try:
@@ -106,7 +117,11 @@ class Detector:
             record['connectivity'] = self.progress['connectivity']
             if record['status'] != 'ok' and record['connectivity']['status'] == 'ok' and not record.get('diagnosis'):
                 record['error'] = '连接测试通过；' + record.get('error', '未取得风险评分')
+        self.stage('done')
+        record['timings'] = {k: round(v, 3) for k, v in self._timings.items()}
+        record['dns_cache_hit'] = bool((self.progress or {}).get('dns_cache_hit'))
         self.progress = None
+        self._phase_started = None
         record['elapsed_seconds'] = round(time.monotonic() - started, 3)
         return record
 
@@ -182,7 +197,7 @@ class Detector:
                                 '线路连通测试通过，连接评分服务或读取评分时失败。',
                                 ['线路连通测试通过'], '可稍后重试；本次失败不等于线路不可用。') from None
                         try:
-                            self.progress = dict(self.progress, stage='diagnosis')
+                            self.stage('diagnosis')
                             detail = self.diagnostics.inspect(node, proxy_port, error,
                                 log_path=log_path, interface=self.interface, interface_index=self.interface_index)
                         except Exception:
@@ -194,6 +209,7 @@ class Detector:
                         failure.args = (detail['message'],)
                         raise failure from None
                 finally:
+                    self.stage('cleanup')
                     if process and process.poll() is None:
                         process.terminate()
                         try:
@@ -211,8 +227,13 @@ class Detector:
             result.pop('destination_ipv4')
             return result
 
-    def _request(self, proxy_port, directory, node=None, manual=False):
-        self.stage('dns')
+    def _resolve_address(self, proxy_port, force=False):
+        key = (self.interface, self.interface_index)
+        if not force and self._dns_cache and self._dns_cache['key'] == key and time.monotonic() < self._dns_cache['expires']:
+            self.stage('dns', dns_cache_hit=True)
+            return self._dns_cache['address'], True
+        self.stage('dns', dns_cache_hit=False)
+        self._dns_cache = None
         with requests.Session() as session:
             session.trust_env = False
             proxy = f'http://127.0.0.1:{proxy_port}'
@@ -221,7 +242,8 @@ class Detector:
                                   proxies={'http': proxy, 'https': proxy}, timeout=(8, 15))
                 if not dns.ok:
                     raise PanelError(f'检测服务的地址解析失败：DNS 服务返回 HTTP {dns.status_code}。')
-                answers = [r['data'] for r in dns.json().get('Answer', []) if r.get('type') == 1]
+                records = dns.json().get('Answer', [])
+                answers = [r['data'] for r in records if r.get('type') == 1]
             except requests.Timeout:
                 raise PanelError('查询 IPPure 地址超时，尚未查询风险评分。') from None
             except requests.exceptions.SSLError:
@@ -231,6 +253,32 @@ class Detector:
         address = next((a for a in answers if ipaddress.ip_address(a).version == 4), None)
         if not address:
             raise PanelError('无法取得检测服务的 IPv4 地址，请稍后重试。')
+        # Cache only the service address, never an exit IP or risk result.
+        # Include CNAME lifetimes and cap reuse to five minutes.
+        ttl = min([300] + [max(0, r.get('TTL', 0)) for r in records if r.get('type') in (1, 5)])
+        if ttl > 0:
+            self._dns_cache = {'key': key, 'address': address, 'expires': time.monotonic() + ttl}
+        return address, False
+
+    def _request(self, proxy_port, directory, node=None, manual=False):
+        address, cached = self._resolve_address(proxy_port)
+        response = self._fetch_score(proxy_port, address)
+        if cached and response.returncode in (6, 7, 28, 35, 56):
+            # A stale edge address must not strand another line. One fresh DNS
+            # lookup; retry only if it actually gives a different address.
+            fresh, _ = self._resolve_address(proxy_port, force=True)
+            if fresh != address:
+                address = fresh
+                response = self._fetch_score(proxy_port, address)
+        return self._parse_response(response, address)
+
+    def _fetch_score(self, proxy_port, address):
+        if self._last_risk_started is not None:
+            wait = max(0, self._last_risk_started + 3 - time.monotonic())
+            if wait:
+                self.stage('risk_wait')
+                time.sleep(wait)
+        self._last_risk_started = time.monotonic()
         env = {k: v for k, v in os.environ.items()
                if k.lower() not in ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']}
         curl = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'curl.exe'
@@ -241,6 +289,9 @@ class Detector:
             '--resolve', f'my.ippure.com:443:{address}', '--connect-timeout', '8', '--max-time', '25',
             '--user-agent', 'Clash-IP-Panel/0.1', '--write-out', '\n%{http_code}', ENDPOINT,
         ], capture_output=True, timeout=30, env=env, creationflags=NO_WINDOW)
+        return response
+
+    def _parse_response(self, response, address):
         if response.returncode == 28:
             raise PanelError('连接这条线路超时，请稍后重试。')
         if response.returncode == 60:

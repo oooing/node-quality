@@ -158,6 +158,82 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(before, self.subs.nodes(self.id))
         self.assertEqual(self.subs.items[self.id]['error'], '下载超时')
 
+    def test_batch_syncs_new_link_then_queues_latest_list_without_switching(self):
+        self.service.save_settings({'paused': True})
+        before = self.subs.nodes(self.id)
+        self.service.enqueue_batch([{'profile_id': self.id}])
+        path = self.client / 'profiles.yaml'
+        data = yaml.safe_load(path.read_text(encoding='utf-8'))
+        data['items'][0]['url'] = 'https://example.invalid/new-link'
+        path.write_text(yaml.safe_dump(data), encoding='utf-8')
+        client_before = {p: p.read_bytes() for p in self.client.rglob('*') if p.is_file()}
+        with patch('subscriptions.fetch_yaml', return_value={'proxies': [proxy('美国 03')]}) as fetch, \
+                patch.object(self.service.control, 'select') as select:
+            self.service.step()
+            fetch.assert_called_once_with('https://example.invalid/new-link')
+            latest = self.subs.nodes(self.id)
+            self.assertEqual(list(self.service.queue), [latest[0]['id']])
+            self.assertNotIn(before[0]['id'], self.service.queue)
+            self.assertFalse(self.detector.calls)
+            self.service.step()
+            self.assertEqual(self.detector.calls, [latest[0]['id']])
+            select.assert_not_called()
+        self.assertTrue(self.service.settings['paused'])
+        self.assertEqual(client_before, {p: p.read_bytes() for p in self.client.rglob('*') if p.is_file()})
+
+    def test_batch_selected_scope_removes_deleted_and_never_adds_other_lines(self):
+        self.service.save_settings({'paused': True})
+        before = self.subs.nodes(self.id)
+        self.service.enqueue_batch([{'profile_id': self.id, 'node_ids': [before[0]['id']]}])
+        # Repeated clicks coalesce; the original selection remains bounded.
+        self.service.enqueue_batch([{'profile_id': self.id, 'node_ids': [before[0]['id']]}])
+        self.assertEqual(len(self.service.batch_queue), 1)
+        with patch('subscriptions.fetch_yaml', return_value={'proxies': [proxy(), proxy('新增')]}):
+            self.service.step()
+        self.assertEqual(list(self.service.queue), [before[0]['id']])
+        self.service.clear_queue()
+        self.service.enqueue_batch([{'profile_id': self.id, 'node_ids': [before[0]['id']]}])
+        with patch('subscriptions.fetch_yaml', return_value={'proxies': [proxy('新增')]}):
+            self.service.step()
+        self.assertFalse(self.service.queue)
+        self.assertIn('没有可检测', self.service.message)
+
+    def test_batch_failed_refresh_does_not_queue_stale_lines(self):
+        self.service.save_settings({'paused': True})
+        self.service.enqueue_batch([{'profile_id': self.id}])
+        with patch('subscriptions.fetch_yaml', side_effect=PanelError('下载超时')):
+            self.service.step()
+        self.assertFalse(self.service.queue)
+        self.assertFalse(self.detector.calls)
+        self.assertIn('列表更新失败', self.service.message)
+        self.assertIsNone(self.service.updating)
+        self.assertFalse(self.service.state()['activity']['batch_profiles'])
+
+    def test_clearing_during_sync_prevents_later_enqueue(self):
+        self.service.enqueue_batch([{'profile_id': self.id}])
+        def fetch(_):
+            self.service.clear_queue()
+            return {'proxies': [proxy()]}
+        with patch('subscriptions.fetch_yaml', side_effect=fetch):
+            self.service.step()
+        self.assertFalse(self.service.queue)
+        self.assertIsNone(self.service.active_batch)
+
+    def test_batch_favorites_groups_and_file_import_need_no_network(self):
+        self.service.save_settings({'paused': True})
+        imported = self.subs.add('本地', text=yaml.safe_dump({'proxies': [proxy('文件线路')]}))
+        file_node = self.subs.nodes(imported)[0]
+        local_profile = next(p['id'] for p in self.subs.public() if p['mode'] == 'cache')
+        local_node = self.subs.nodes(local_profile)[1]
+        self.service.enqueue_batch([
+            {'profile_id': imported, 'node_ids': [file_node['id']]},
+            {'profile_id': local_profile, 'node_ids': [local_node['id']]}])
+        with patch('subscriptions.fetch_yaml') as fetch:
+            for _ in range(4):
+                self.service.step()
+            fetch.assert_not_called()
+        self.assertEqual(self.detector.calls, [file_node['id'], local_node['id']])
+
     def test_automatic_initial_check_and_resume(self):
         self.assertTrue(self.service.step())
         self.assertEqual(len(self.detector.calls), 1)
@@ -166,6 +242,18 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(second.step())
         self.assertEqual(len(set(self.detector.calls)), 2)
         self.assertFalse(second.step())
+
+    def test_scheduler_continues_work_immediately_but_waits_when_idle(self):
+        steps = iter([True, False])
+        def step():
+            worked = next(steps)
+            if not worked:
+                self.service.stop_event.set()
+            return worked
+        with patch.object(self.service, 'step', side_effect=step), \
+                patch.object(self.service.wake, 'wait') as wait:
+            self.service.run()
+        self.assertEqual([call.args[0] for call in wait.call_args_list], [0, 5])
 
     def test_progress_records_failures_and_survives_relaunch(self):
         self.assertEqual(self.service.state(self.id)['activity']['progress'],
@@ -191,6 +279,29 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.service.state(other)['activity']['progress']['completed'], 0)
         self.service.step()
         self.assertEqual(self.service.state(self.id)['activity']['progress']['completed'], 2)
+
+    def test_task_summaries_do_not_follow_viewed_list(self):
+        self.service.save_settings({'paused': True})
+        self.service.enqueue(self.id)
+        self.service.step()
+        self.service.step()
+        other = next(p['id'] for p in self.subs.public() if p['id'] != self.id)
+        self.service.enqueue(other)
+        first = self.service.state(self.id)['activity']['lists']
+        second = self.service.state(other)['activity']['lists']
+        self.assertEqual(first, second)
+        by_id = {r['profile_id']: r for r in first}
+        self.assertEqual(by_id[self.id]['remaining'], 0)
+        self.assertEqual(by_id[self.id]['queued'], 0)
+        self.assertIsNotNone(by_id[self.id]['checked_at'])
+        self.assertEqual(by_id[other]['completed'], 0)
+        self.assertGreater(by_id[other]['queued'], 0)
+        self.assertIsNone(by_id[other]['checked_at'])
+        node = self.subs.nodes(other)[0]
+        self.service.active = node
+        self.assertTrue(next(r for r in self.service.state(self.id)['activity']['lists']
+                             if r['profile_id'] == other)['active'])
+        self.service.active = None
 
     def test_progress_expiry_config_change_and_unsupported(self):
         nodes = self.subs.nodes(self.id)
